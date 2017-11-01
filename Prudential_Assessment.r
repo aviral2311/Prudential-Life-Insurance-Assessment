@@ -1,9 +1,26 @@
 library(ggplot2)
 library(gridExtra)
-
+library(dplyr)
+library(xgboost)
 getwd()
+setwd("C:/Users/ssuman/Documents")
 train <- read.table("train.csv", sep=",", header=TRUE)
 test <- read.table("test.csv", sep=",", header=TRUE)
+
+#removing rows which are not in the test data
+
+train=dplyr::filter(train, Product_Info_7!=2)
+train=dplyr::filter(train, Insurance_History_3!=2)
+train=dplyr::filter(train, Medical_History_5!=3)
+train=dplyr::filter(train, Medical_History_6!=2)
+train=dplyr::filter(train, Medical_History_9!=3)
+train=dplyr::filter(train, Medical_History_12!=1)
+train=dplyr::filter(train, Medical_History_16!=2)
+train=dplyr::filter(train, Medical_History_17!=1)
+train=dplyr::filter(train, Medical_History_23!=2)
+train=dplyr::filter(train, Medical_History_31!=2)
+train=dplyr::filter(train, Medical_History_37!=3)
+train=dplyr::filter(train, Medical_History_41!=2)
 
 
 #Separate categorical, continous and discrete variables
@@ -48,25 +65,17 @@ summary(train.cat)
 summary(test.cat)
 
 
-```
+#Contrary to the suggested separation of the variables, it seems reasonable to use the variables Medical_History_2  and Medical_History_10 as continuous.
 
-Contrary to the suggested separation of the variables, it seems reasonable to use the variables Medical_History_2  and Medical_History_10 as continuous.
+#What are the dimensions of the datasets?
 
-What are the dimensions of the datasets?
-
-```{r}
 nrow(train.cat)
 
 cat("Train data has", nrow(train), "rows and", ncol(train), "columns! \n")
 cat("Test data has", nrow(test), "rows and", ncol(test), "columns! \n")
 
 
-```
-
 #In the above structure commands we saw missing data, how much is it?
-
-
-```{r}
 
 sum(is.na(train)) / (nrow(train) * ncol(train))
 sum(is.na(test)) / (nrow(test) * ncol(test))
@@ -85,17 +94,95 @@ round(colSums(train.na.per.response) / sum(train.na.per.response), digits=4)
 
 #Are there any duplicate rows?
 
-```{r}
+
 cat("Train data set - Number of duplicated rows:", nrow(train) - nrow(unique(train)), "\n")
 cat("Test data set - Number of duplicated rows:", nrow(test) - nrow(unique(test)), "\n")
 
-```
 
-Are there any constant columns?
 
-```{r}
+#Are there any constant columns?
+
+
 train.const <- sapply(train, function(x) { length(unique(x)) == 1 })
 test.const <- sapply(test, function(x) { length(unique(x)) == 1 })
 cat("Train data set - Number of constant columns:", sum(train.const), "\n")
 cat("Test data set - Number of constant columns:", sum(test.const), "\n")
-```
+
+
+print(dim(train))
+print(head(train, n=5))
+print(dim(test))
+print(head(test, n=5))
+
+
+test$Response = 0
+
+testId = test$Id
+train$Id = test$Id = NULL
+
+train[is.na(train)] <- -1
+test[is.na(test)] <- -1
+
+train$Product_Info_2_char = as.factor(substr(train$Product_Info_2, 1,1))
+train$Product_Info_2_num = as.factor(substr(train$Product_Info_2, 2,2))
+test$Product_Info_2_char = as.factor(substr(test$Product_Info_2, 1,1))
+test$Product_Info_2_num = as.factor(substr(test$Product_Info_2, 2,2))
+
+train$BMI_Age <- train$BMI * train$Ins_Age
+test$BMI_Age <- test$BMI * test$Ins_Age
+
+response <- train$Response
+train$Response <- NULL
+
+train$Medical_History_10 <- NULL
+train$Medical_History_24 <- NULL
+
+test$Medical_History_10 <- NULL
+test$Medical_History_24 <- NULL
+
+feature.names <- colnames(train)
+feature.names
+for (f in feature.names) {
+  if (class(train[[f]])=="character") {
+    levels <- unique(c(train[[f]], test[[f]]))
+    train[[f]] <- as.integer(factor(train[[f]], levels=levels))
+    test[[f]]  <- as.integer(factor(test[[f]],  levels=levels))
+  }
+}
+train
+dtrain<-xgb.DMatrix(data=data.matrix(train[,feature.names]),label=response, missing=NA)
+watchlist<-list(val=dtrain,train=dtrain)
+
+param <- list(  objective           = "reg:linear", 
+                booster             = "gbtree",
+                eta                 = 0.05, # 0.06, #0.01,
+                max_depth           =  6, #changed from default of 8
+                subsample           = 0.8, # 0.7
+                min_child_weight    = 25,
+                colsample_bytree    = 0.7, # 0.7
+                silent              = 0
+)
+
+set.seed(seed)
+clf <- xgb.train(   params              = param, 
+                    data                = dtrain, 
+                    nrounds             = 500, 
+                    verbose             = 1,  
+                    print.every.n       = 10,
+                    watchlist           = watchlist,
+                    maximize            = FALSE
+)
+set.seed(seed)
+clf <- xgb.train(   params              = param, 
+                    data                = dtrain, 
+                    nrounds             = 500, 
+                    verbose             = 1,  
+                    print.every.n       = 10,
+                    watchlist           = watchlist,
+                    maximize            = FALSE
+)
+
+dtest<-xgb.DMatrix(data=data.matrix(test[,feature.names]), missing = NA)
+dtest
+pred <- predict(clf, dtest)
+pred
